@@ -3,50 +3,59 @@ package simple_buffer
 import (
 	"fmt"
 	"strings"
+
+	"github.com/KlyuchnikovV/edicode/core/context"
+	"golang.design/x/clipboard"
 )
 
 type Buffer struct {
+	name string
 	data []rune
 
-	line   int
-	offset int
-	cursor int
+	ctx context.Context
+
+	KeyEvents   chan KeyboardEvent
+	MouseEvents chan MouseEvent
+	Selection
 }
 
-func New(runes ...rune) *Buffer {
-	return &Buffer{
-		data: runes,
+func New(ctx context.Context, name string, runes ...rune) *Buffer {
+	var buffer = &Buffer{
+		ctx:         ctx,
+		name:        name,
+		data:        runes,
+		KeyEvents:   make(chan KeyboardEvent, 100),
+		MouseEvents: make(chan MouseEvent, 100),
 	}
+
+	buffer.Selection = NewSelection(func(s string, i interface{}) {
+		buffer.ctx.Emit(s, name, i)
+	}, func(i int) int {
+		l, err := buffer.LengthOfLine(i)
+		if err != nil {
+			panic(err)
+		}
+
+		return l
+	}, func() int {
+		return numberOfLines(buffer.data...)
+	})
+
+	if err := clipboard.Init(); err != nil {
+		panic(err)
+	}
+
+	go buffer.listenEvents()
+
+	return buffer
 }
 
-func NewFromBytes(bytes ...byte) *Buffer {
-	return &Buffer{
-		data: []rune(string(bytes)),
-	}
+func NewFromBytes(ctx context.Context, name string, bytes ...byte) *Buffer {
+	return New(ctx, name, []rune(string(bytes))...)
 }
 
 func (buffer *Buffer) String() string {
 	return string(buffer.data)
-}
-
-func (buffer *Buffer) Insert(index int, runes ...rune) error {
-	if err := buffer.checkIndex(index); err != nil {
-		return err
-	}
-
-	if len(runes) == 0 {
-		return nil
-	}
-
-	var data = make([]rune, 0, len(buffer.data)+len(runes))
-
-	data = append(data, buffer.data[:index]...)
-	data = append(data, runes...)
-	data = append(data, buffer.data[index:]...)
-
-	buffer.data = data
-
-	return nil
 }
 
 func (buffer *Buffer) Append(runes ...rune) error {
@@ -55,41 +64,75 @@ func (buffer *Buffer) Append(runes ...rune) error {
 	}
 
 	defer func() {
-		buffer.cursor += len(runes)
-		buffer.restoreCurrentLine()
+		var (
+			idx    = strings.LastIndex(string(runes), "\n")
+			offset = len(runes)
+		)
+		if idx != -1 {
+			offset = len(runes[idx+1:])
+		}
+
+		buffer.Selection.MoveCaret(numberOfLines(runes...), offset)
 	}()
 
-	return buffer.Insert(buffer.cursor, runes...)
+	return buffer.Insert(buffer.Selection, runes...)
 }
 
-func (buffer *Buffer) Remove(index, symbols int) error {
-	if err := buffer.checkIndex(index); err != nil {
-		return err
+func (buffer *Buffer) Insert(selection Selection, runes ...rune) error {
+	if !selection.IsCollapsed() {
+		if err := buffer.Remove(selection, false); err != nil {
+			return err
+		}
 	}
 
-	if err := buffer.checkIndex(index + symbols); err != nil {
-		return err
+	if len(runes) == 0 {
+		return nil
 	}
 
-	var data = make([]rune, 0, len(buffer.data)-symbols)
+	var offset, _ = selection.Linear()
 
-	data = append(data, buffer.data[:index]...)
-	data = append(data, buffer.data[index+symbols:]...)
+	var data = make([]rune, 0, len(buffer.data)+len(runes))
+
+	data = append(data, buffer.data[:offset]...)
+	data = append(data, runes...)
+	data = append(data, buffer.data[offset:]...)
 
 	buffer.data = data
+	buffer.ctx.Emit("buffer", "changed", buffer.name)
 
 	return nil
 }
 
-func (buffer *Buffer) Delete(symbols int) error {
-	if err := buffer.checkIndex(buffer.cursor - symbols); err != nil {
-		return err
+func (buffer *Buffer) Remove(selection Selection, emitEvent bool) error {
+	if selection.IsCollapsed() {
+		return nil
 	}
 
-	buffer.cursor -= symbols
-	defer buffer.restoreCurrentLine()
+	var offset, length = selection.Linear()
 
-	return buffer.Remove(buffer.cursor, symbols)
+	var data = make([]rune, 0, len(buffer.data)-length)
+
+	data = append(data, buffer.data[:offset]...)
+	data = append(data, buffer.data[offset+length:]...)
+
+	buffer.data = data
+	if emitEvent {
+		buffer.ctx.Emit("buffer", "changed", buffer.name)
+	}
+
+	buffer.Selection.Collapse()
+
+	return nil
+}
+
+func (buffer *Buffer) Delete() error {
+	if buffer.Selection.IsCollapsed() {
+		buffer.Selection.start.MoveLeft(1)
+	}
+
+	defer buffer.Selection.Collapse()
+
+	return buffer.Remove(buffer.Selection, true)
 }
 
 func (buffer *Buffer) LengthOfLine(line int) (int, error) {
@@ -102,144 +145,47 @@ func (buffer *Buffer) LengthOfLine(line int) (int, error) {
 	return len(lines[line]), nil
 }
 
-func (buffer *Buffer) GetRange(index, symbols int) (string, error) {
-	if err := buffer.checkIndex(index); err != nil {
-		return "", err
-	}
+func (buffer *Buffer) GetSelectedText() string {
+	start, end := buffer.GetSelection()
 
-	if err := buffer.checkIndex(index + symbols); err != nil {
-		return "", err
-	}
-
-	return string(buffer.data[index : index+symbols]), nil
+	return string(buffer.data[start.Linear():end.Linear()])
 }
 
-func (buffer Buffer) checkIndex(index int) error {
-	if index < 0 || index >= len(buffer.data) {
-		return fmt.Errorf("index not in range [%d : %d)", 0, len(buffer.data))
+func (buffer *Buffer) Copy() {
+	clipboard.Write(clipboard.FmtText, []byte(buffer.GetSelectedText()))
+}
+
+func (buffer *Buffer) Paste() error {
+	if !buffer.Selection.IsCollapsed() {
+		if err := buffer.Remove(buffer.Selection, false); err != nil {
+			return err
+		}
 	}
+
+	return buffer.Append([]rune(string(clipboard.Read(clipboard.FmtText)))...)
+}
+
+func (buffer *Buffer) Cut() error {
+	buffer.Copy()
+	return buffer.Remove(buffer.Selection, true)
+}
+
+func (buffer *Buffer) SelectAll() error {
+	var (
+		numberOfLines     = numberOfLines(buffer.data...)
+		lengthOfLine, err = buffer.LengthOfLine(numberOfLines - 1)
+	)
+
+	if err != nil {
+		return err
+	}
+
+	buffer.SetSelection(Caret{
+		Line: 0, Offset: 0,
+	}, Caret{
+		Line:   numberOfLines - 1,
+		Offset: lengthOfLine,
+	})
 
 	return nil
-}
-
-func (buffer *Buffer) CursorUp() {
-	var lines = strings.Split(buffer.String(), "\n")
-
-	if buffer.line == 0 {
-		buffer.cursor = 0
-		return
-	}
-
-	buffer.line--
-
-	buffer.cursor -= buffer.offset
-
-	if len(lines[buffer.line]) < buffer.offset {
-		buffer.offset = len(lines[buffer.line])
-	}
-
-	buffer.cursor -= len(lines[buffer.line]) - buffer.offset + 1
-
-	buffer.restoreCurrentLine()
-}
-
-func (buffer *Buffer) CursorDown() {
-	var lines = strings.Split(buffer.String(), "\n")
-
-	if buffer.line >= len(lines)-1 {
-		buffer.cursor = len(buffer.data) - 1
-		return
-	}
-
-	buffer.line++
-
-	buffer.cursor += len(lines[buffer.line-1]) - buffer.offset + 1
-
-	if len(lines[buffer.line]) < buffer.offset {
-		buffer.offset = len(lines[buffer.line])
-	}
-
-	buffer.cursor += buffer.offset
-
-	buffer.restoreCurrentLine()
-}
-
-func (buffer *Buffer) CursorLeft() {
-	if buffer.cursor > 0 {
-		buffer.cursor--
-	}
-	buffer.restoreCurrentLine()
-}
-
-func (buffer *Buffer) CursorRight() {
-	if buffer.cursor < len(buffer.data) {
-		buffer.cursor++
-	}
-	buffer.restoreCurrentLine()
-}
-
-func (buffer *Buffer) restoreCurrentLine() {
-	var (
-		line   = 0
-		offset = 0
-		cursor = buffer.cursor
-	)
-
-	for _, symbol := range buffer.data {
-		if cursor == 0 {
-			break
-		}
-
-		if symbol == '\n' {
-			line++
-			offset = -1
-		}
-
-		cursor--
-		offset++
-	}
-
-	buffer.line = line
-	buffer.offset = offset
-}
-
-func (buffer *Buffer) restoreCursor() {
-	var (
-		line   = buffer.line
-		offset = buffer.offset
-		cursor = 0
-	)
-
-	for _, symbol := range buffer.data {
-		if line == 0 {
-			if offset == 0 {
-				break
-			}
-
-			offset--
-		}
-
-		if symbol == '\n' {
-			line--
-		}
-
-		cursor++
-	}
-
-	buffer.cursor = cursor
-}
-
-func (buffer *Buffer) GetCursor() (int, int, int) {
-	return buffer.line, buffer.offset, buffer.cursor
-}
-
-func (buffer *Buffer) SetCursor(line, offset int) {
-	buffer.line = line
-
-	if offset == -1 {
-		offset, _ = buffer.LengthOfLine(line)
-	}
-	buffer.offset = offset
-
-	buffer.restoreCursor()
 }
