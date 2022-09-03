@@ -2,7 +2,6 @@ package simple_buffer
 
 import (
 	"fmt"
-	"strings"
 )
 
 type KeyboardEvent struct {
