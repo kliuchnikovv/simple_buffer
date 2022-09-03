@@ -12,6 +12,7 @@ github.com/KlyuchnikovV/linetree v0.0.0-20211209120521-7dcdde3ffe70/go.mod h1:gi
 github.com/KlyuchnikovV/seqtree v0.0.0-20210306185046-d8d1ac40606c/go.mod h1:/Yo2n5mVBJAIM8LiZHERVVwXptzUmTXynGRDBeLUwIw=
 github.com/KlyuchnikovV/stack v0.0.0-20200325201546-1b37f0875e01/go.mod h1:/lVt2XeS0PAXniX9UqL19jDky4u1FlouhWxBHrivP6o=
 github.com/KlyuchnikovV/stack v0.0.0-20200625174552-0c6f8c8a4e96/go.mod h1:/lVt2XeS0PAXniX9UqL19jDky4u1FlouhWxBHrivP6o=
+github.com/KlyuchnikovV/stack v0.0.0-20210427103552-f6f21f8b4227 h1:6cfT3pA4+zyIrLtqHKpi7STdm3xplcLahoke8zdTAzc=
 github.com/KlyuchnikovV/stack v0.0.0-20210427103552-f6f21f8b4227/go.mod h1:/lVt2XeS0PAXniX9UqL19jDky4u1FlouhWxBHrivP6o=
 github.com/Masterminds/semver v1.4.2/go.mod h1:MB6lktGJrhw8PrUyiEoblNEGEQ+RzHPF078ddwwvV3Y=
 github.com/Masterminds/semver v1.5.0 h1:H65muMkzWKEuNDnfl9d70GUjFniHKHRbFPGBuZ3QEww=

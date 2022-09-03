@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/KlyuchnikovV/edicode/core/context"
+	"github.com/KlyuchnikovV/simple_buffer/selection"
+	"github.com/KlyuchnikovV/simple_buffer/stack"
 	"golang.design/x/clipboard"
 )
 
@@ -15,8 +17,10 @@ type Buffer struct {
 	ctx context.Context
 
 	KeyEvents   chan KeyboardEvent
-	MouseEvents chan MouseEvent
-	Selection
+	MouseEvents chan selection.MouseEvent
+	selection.Selection
+
+	stack *stack.ActionStack
 }
 
 func New(ctx context.Context, name string, runes ...rune) *Buffer {
@@ -25,20 +29,15 @@ func New(ctx context.Context, name string, runes ...rune) *Buffer {
 		name:        name,
 		data:        runes,
 		KeyEvents:   make(chan KeyboardEvent, 100),
-		MouseEvents: make(chan MouseEvent, 100),
+		MouseEvents: make(chan selection.MouseEvent, 100),
 	}
 
-	buffer.Selection = NewSelection(func(s string, i interface{}) {
-		buffer.ctx.Emit(s, name, i)
-	}, func(i int) int {
-		l, err := buffer.LengthOfLine(i)
-		if err != nil {
-			panic(err)
-		}
+	buffer.stack = stack.New(50, buffer.insert, buffer.remove)
 
-		return l
-	}, func() int {
-		return numberOfLines(buffer.data...)
+	buffer.Selection = selection.NewSelection(func(s string, i interface{}) {
+		buffer.ctx.Emit(s, name, i)
+	}, buffer.GetLine, func() int {
+		return strings.Count(string(runes), "\n") + 1
 	})
 
 	if err := clipboard.Init(); err != nil {
@@ -63,33 +62,73 @@ func (buffer *Buffer) Append(runes ...rune) error {
 		return nil
 	}
 
-	defer func() {
-		var (
-			idx    = strings.LastIndex(string(runes), "\n")
-			offset = len(runes)
-		)
-		if idx != -1 {
-			offset = len(runes[idx+1:])
-		}
+	// defer func() {
+	// 	var (
+	// 		idx    = strings.LastIndex(string(runes), "\n")
+	// 		offset = len(runes)
+	// 	)
+	// 	if idx != -1 {
+	// 		offset = len(runes[idx+1:])
+	// 	}
 
-		buffer.Selection.MoveCaret(numberOfLines(runes...), offset)
-	}()
+	// 	buffer.Selection.MoveCaret(numberOfLines(runes...), offset)
+	// 	buffer.Collapse()
+	// }()
 
 	return buffer.Insert(buffer.Selection, runes...)
 }
 
-func (buffer *Buffer) Insert(selection Selection, runes ...rune) error {
-	if !selection.IsCollapsed() {
-		if err := buffer.Remove(selection, false); err != nil {
-			return err
-		}
-	}
-
+func (buffer *Buffer) Insert(sel selection.Selection, runes ...rune) error {
 	if len(runes) == 0 {
 		return nil
 	}
 
-	var offset, _ = selection.Linear()
+	// var (
+	// 	newSelection = sel.Copy()
+	// 	end          = buffer.Selection.End()
+	// )
+
+	// end.Offset += len(runes)
+	// newSelection.SetSelection(sel.Start(), end)
+
+	// var event stack.Event = stack.NewInsertion(newSelection, runes)
+	// if !sel.IsCollapsed() {
+	// 	event = stack.NewReplacing(
+	// 		*event.(*stack.Insertion),
+	// 		*stack.NewDeletion(sel.Copy(), buffer.GetBySelection(sel)),
+	// 	)
+	// }
+
+	defer func(old []rune) {
+		var newSelection = sel.Copy()
+		newSelection.SetSelection(sel.Start(), buffer.Selection.End())
+
+		var event stack.Event = stack.NewInsertion(newSelection, runes)
+		if !sel.IsCollapsed() {
+			event = stack.NewReplacing(
+				*event.(*stack.Insertion),
+				*stack.NewDeletion(sel, old),
+			)
+		}
+
+		buffer.stack.Push(event)
+	}(buffer.GetBySelection(sel))
+
+	return buffer.insert(sel, runes...)
+}
+
+func (buffer *Buffer) insert(sel selection.Selection, runes ...rune) error {
+	if len(runes) == 0 {
+		return nil
+	}
+
+	if !sel.IsCollapsed() {
+		if err := buffer.remove(sel); err != nil {
+			return err
+		}
+	}
+
+	var offset, _ = sel.Linear()
 
 	var data = make([]rune, 0, len(buffer.data)+len(runes))
 
@@ -98,17 +137,51 @@ func (buffer *Buffer) Insert(selection Selection, runes ...rune) error {
 	data = append(data, buffer.data[offset:]...)
 
 	buffer.data = data
+
+	var (
+		idx           = strings.LastIndex(string(runes), "\n")
+		numberOfLines = strings.Count(string(runes), "\n")
+	)
+
+	offset = len(runes)
+	if idx != -1 {
+		offset = len(runes[idx+1:])
+	}
+
+	buffer.Selection.MoveCaret(numberOfLines, offset-buffer.Start().Offset)
+	buffer.Collapse()
+
 	buffer.ctx.Emit("buffer", "changed", buffer.name)
 
 	return nil
 }
 
-func (buffer *Buffer) Remove(selection Selection, emitEvent bool) error {
-	if selection.IsCollapsed() {
+func (buffer *Buffer) Delete() error {
+	if buffer.Selection.IsCollapsed() {
+		buffer.Selection.MoveCaret(0, -1)
+	}
+
+	return buffer.Remove(buffer.Selection)
+}
+
+func (buffer *Buffer) Remove(sel selection.Selection) error {
+	if sel.IsCollapsed() {
 		return nil
 	}
 
-	var offset, length = selection.Linear()
+	defer func(s selection.Selection, runes []rune) {
+		buffer.stack.Push(stack.NewDeletion(s, runes))
+	}(sel.Copy(), buffer.GetBySelection(sel))
+
+	return buffer.remove(sel)
+}
+
+func (buffer *Buffer) remove(sel selection.Selection) error {
+	if sel.IsCollapsed() {
+		return nil
+	}
+
+	var offset, length = sel.Linear()
 
 	var data = make([]rune, 0, len(buffer.data)-length)
 
@@ -116,23 +189,11 @@ func (buffer *Buffer) Remove(selection Selection, emitEvent bool) error {
 	data = append(data, buffer.data[offset+length:]...)
 
 	buffer.data = data
-	if emitEvent {
-		buffer.ctx.Emit("buffer", "changed", buffer.name)
-	}
-
-	buffer.Selection.Collapse()
+	sel.Collapse()
+	buffer.Selection.SetSelection(sel.Start(), sel.End())
+	buffer.ctx.Emit("buffer", "changed", buffer.name)
 
 	return nil
-}
-
-func (buffer *Buffer) Delete() error {
-	if buffer.Selection.IsCollapsed() {
-		buffer.Selection.start.MoveLeft(1)
-	}
-
-	defer buffer.Selection.Collapse()
-
-	return buffer.Remove(buffer.Selection, true)
 }
 
 func (buffer *Buffer) LengthOfLine(line int) (int, error) {
@@ -145,10 +206,20 @@ func (buffer *Buffer) LengthOfLine(line int) (int, error) {
 	return len(lines[line]), nil
 }
 
-func (buffer *Buffer) GetSelectedText() string {
-	start, end := buffer.GetSelection()
+func (buffer *Buffer) GetLine(line int) []rune {
+	var lines = strings.Split(buffer.String(), "\n")
 
-	return string(buffer.data[start.Linear():end.Linear()])
+	return []rune(lines[line])
+}
+
+func (buffer *Buffer) GetSelectedText() string {
+	return string(buffer.GetBySelection(buffer.Selection))
+}
+
+func (buffer *Buffer) GetBySelection(sel selection.Selection) []rune {
+	var start, end = sel.GetSelection()
+
+	return buffer.data[start.Linear():end.Linear()]
 }
 
 func (buffer *Buffer) Copy() {
@@ -156,36 +227,42 @@ func (buffer *Buffer) Copy() {
 }
 
 func (buffer *Buffer) Paste() error {
-	if !buffer.Selection.IsCollapsed() {
-		if err := buffer.Remove(buffer.Selection, false); err != nil {
-			return err
-		}
-	}
-
 	return buffer.Append([]rune(string(clipboard.Read(clipboard.FmtText)))...)
 }
 
 func (buffer *Buffer) Cut() error {
 	buffer.Copy()
-	return buffer.Remove(buffer.Selection, true)
+	return buffer.Delete()
 }
 
 func (buffer *Buffer) SelectAll() error {
 	var (
-		numberOfLines     = numberOfLines(buffer.data...)
-		lengthOfLine, err = buffer.LengthOfLine(numberOfLines - 1)
+		numberOfLines     = strings.Count(string(buffer.data), "\n")
+		lengthOfLine, err = buffer.LengthOfLine(numberOfLines)
 	)
 
 	if err != nil {
 		return err
 	}
 
-	buffer.SetSelection(Caret{
+	buffer.SetSelection(selection.Caret{
 		Line: 0, Offset: 0,
-	}, Caret{
-		Line:   numberOfLines - 1,
+	}, selection.Caret{
+		Line:   numberOfLines,
 		Offset: lengthOfLine,
 	})
 
 	return nil
+}
+
+func (buffer *Buffer) Name() string {
+	return buffer.name
+}
+
+func (buffer *Buffer) Undo() {
+	buffer.stack.Undo()
+}
+
+func (buffer *Buffer) Redo() {
+	buffer.stack.Redo()
 }

@@ -1,26 +1,26 @@
-package simple_buffer
+package selection
 
 type Caret struct {
 	Line   int `json:"line"`
 	Offset int `json:"offset"`
 
-	lenOfLine     func(int) int
+	getLine       func(int) []rune
 	numberOfLines func() int
 }
 
-func NewCaret(line, offset int, lenOfLine func(int) int, numberOfLines func() int) Caret {
+func NewCaret(line, offset int, getLine func(int) []rune, numberOfLines func() int) Caret {
 	return Caret{
 		Line:          line,
 		Offset:        offset,
-		lenOfLine:     lenOfLine,
+		getLine:       getLine,
 		numberOfLines: numberOfLines,
 	}
 }
 
 func (c Caret) Get() (int, int) {
 	var offset = c.Offset
-	if c.Offset > c.lenOfLine(c.Line) {
-		offset = c.lenOfLine(c.Line)
+	if c.Offset > len(c.getLine(c.Line)) {
+		offset = len(c.getLine(c.Line))
 	}
 
 	return c.Line, offset
@@ -38,13 +38,13 @@ func (c *Caret) Down() {
 	if c.Line < c.numberOfLines() {
 		c.Line++
 	} else {
-		c.Offset = c.lenOfLine(c.Line)
+		c.Offset = len(c.getLine(c.Line))
 	}
 }
 
 func (c *Caret) Left() {
-	if c.Offset > c.lenOfLine(c.Line) {
-		c.Offset = c.lenOfLine(c.Line)
+	if c.Offset > len(c.getLine(c.Line)) {
+		c.Offset = len(c.getLine(c.Line))
 	}
 
 	if c.Offset > 0 {
@@ -55,16 +55,16 @@ func (c *Caret) Left() {
 
 	if c.Line != 0 {
 		c.Line--
-		c.Offset = c.lenOfLine(c.Line)
+		c.Offset = len(c.getLine(c.Line))
 	}
 }
 
 func (c *Caret) Right() {
-	if c.Offset > c.lenOfLine(c.Line) {
-		c.Offset = c.lenOfLine(c.Line)
+	if c.Offset > len(c.getLine(c.Line)) {
+		c.Offset = len(c.getLine(c.Line))
 	}
 
-	if c.Offset < c.lenOfLine(c.Line) {
+	if c.Offset < len(c.getLine(c.Line)) {
 		c.Offset++
 
 		return
@@ -106,7 +106,7 @@ func (c *Caret) Set(line, offset int) {
 	}
 	c.Line = line
 
-	if offset > c.lenOfLine(line) {
+	if offset > len(c.getLine(line)) {
 		return
 	}
 	c.Offset = offset
@@ -124,7 +124,7 @@ func (c Caret) Linear() int {
 	var linear = 0
 
 	for line := 0; line < c.Line; line++ {
-		linear += c.lenOfLine(line) + 1
+		linear += len(c.getLine(line)) + 1
 	}
 
 	_, offset := c.Get()
@@ -139,7 +139,7 @@ type Selection struct {
 	emitter func(string, interface{})
 }
 
-func NewSelection(emitter func(string, interface{}), lenOfLine func(int) int, numberOfLines func() int) Selection {
+func NewSelection(emitter func(string, interface{}), lenOfLine func(int) []rune, numberOfLines func() int) Selection {
 	return Selection{
 		emitter: emitter,
 		start:   NewCaret(0, 0, lenOfLine, numberOfLines),
@@ -147,25 +147,40 @@ func NewSelection(emitter func(string, interface{}), lenOfLine func(int) int, nu
 	}
 }
 
+func (s Selection) Start() Caret {
+	return s.start
+}
+
+func (s Selection) End() Caret {
+	return s.end
+}
+
 func (s *Selection) MoveCaret(line, offset int) {
-	if line-1 > 0 {
-		s.start.MoveDown(line-1)
-	} else {
-		s.start.MoveUp(line-1)
+	if line != 0 {
+		if line-1 > 0 {
+			s.start.MoveDown(line)
+		} else {
+			s.start.MoveUp(-line)
+		}
 	}
 
-	if offset > 0 {
-		s.start.MoveRight(offset)
-	} else {
-		s.start.MoveLeft(offset)
+	if offset != 0 {
+		if offset > 0 {
+			s.start.MoveRight(offset)
+		} else {
+			s.start.MoveLeft(-offset)
+		}
 	}
-
-	s.Collapse()
 }
 
 func (s *Selection) SetSelection(start, end Caret) {
 	s.start.SetAs(start)
 	s.end.SetAs(end)
+
+	if s.end.Line < s.start.Line || s.end.Offset < s.start.Offset {
+		s.start.Line, s.end.Line = s.end.Line, s.start.Line
+		s.start.Offset, s.end.Offset = s.end.Offset, s.start.Offset
+	}
 
 	s.emitter("cursor_moved", SelectionChangedEvent{
 		Start: s.start,
@@ -180,14 +195,14 @@ func (s Selection) GetSelection() (Caret, Caret) {
 	)
 
 	return Caret{
-			Line:   startLine,
-			Offset: startOffset,
-			lenOfLine: s.start.lenOfLine,
+			Line:          startLine,
+			Offset:        startOffset,
+			getLine:       s.start.getLine,
 			numberOfLines: s.start.numberOfLines,
 		}, Caret{
-			Line:   endLine,
-			Offset: endOffset,
-			lenOfLine: s.end.lenOfLine,
+			Line:          endLine,
+			Offset:        endOffset,
+			getLine:       s.end.getLine,
 			numberOfLines: s.end.numberOfLines,
 		}
 }
@@ -265,4 +280,34 @@ func (s *Selection) Collapse() {
 		Start: s.start,
 		End:   s.end,
 	})
+}
+
+func (s *Selection) SetStart(line, offset int) {
+	s.start.Set(line, offset)
+	s.Collapse()
+}
+
+func (s *Selection) Swap() {
+	s.start, s.end = s.end, s.start
+}
+
+func (s *Selection) SetEnd(line, offset int) {
+	s.end.Set(line, offset)
+
+	if s.end.Line < s.start.Line || (s.end.Line == s.start.Line && s.end.Offset < s.start.Offset) {
+		s.Swap()
+	}
+
+	s.emitter("cursor_moved", SelectionChangedEvent{
+		Start: s.start,
+		End:   s.end,
+	})
+}
+
+func (s Selection) Copy() Selection {
+	return Selection{
+		start:   s.start,
+		end:     s.end,
+		emitter: s.emitter,
+	}
 }

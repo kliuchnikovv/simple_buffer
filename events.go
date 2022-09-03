@@ -30,6 +30,9 @@ func (buffer *Buffer) handleKeyEvent(event KeyboardEvent) error {
 	if event.Meta {
 		return buffer.handleMeta(event)
 	}
+	if event.Alt {
+		return buffer.handleAlt(event)
+	}
 
 	switch event.Key {
 	case "ArrowLeft":
@@ -50,6 +53,8 @@ func (buffer *Buffer) handleKeyEvent(event KeyboardEvent) error {
 		return buffer.Append('\t')
 	case "Backspace":
 		return buffer.Delete()
+	case "Shift":
+		return nil
 	}
 
 	if len(event.Key) == 1 {
@@ -74,6 +79,31 @@ func (buffer *Buffer) handleMeta(event KeyboardEvent) error {
 		return buffer.Cut()
 	case "a":
 		return buffer.SelectAll()
+	case "z":
+		if !event.Shift {
+			buffer.Undo()
+		} else {
+			buffer.Redo()
+		}
+	}
+
+	return nil
+}
+
+func (buffer *Buffer) handleAlt(event KeyboardEvent) error {
+	switch event.Key {
+	// case "ArrowLeft":
+	// 	buffer.CursorLeft(event.Shift)
+	// 	return nil
+	// case "ArrowRight":
+	// 	buffer.CursorRight(event.Shift)
+	// 	return nil
+	// case "ArrowUp":
+	// 	buffer.MoveSelectedUp()
+	// return nil
+	// case "ArrowDown":
+	// 	buffer.CursorDown(event.Shift)
+	// 	return nil
 	}
 
 	return nil

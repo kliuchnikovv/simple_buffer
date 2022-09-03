@@ -10,6 +10,7 @@ require (
 )
 
 require (
+	github.com/KlyuchnikovV/stack v0.0.0-20210427103552-f6f21f8b4227
 	github.com/Masterminds/semver v1.5.0 // indirect
 	github.com/abadojack/whatlanggo v1.0.1 // indirect
 	github.com/fatih/color v1.13.0 // indirect
