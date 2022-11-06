@@ -21,7 +21,7 @@ func (buffer *Buffer) listenEvents() {
 				panic("not ok")
 			}
 
-			buffer.Selection.SetSelection(event.Start, event.End)
+			buffer.Selection.SetStartAndEnd(event.Start, event.End)
 		}
 	}
 }
@@ -57,7 +57,7 @@ func (buffer *Buffer) handleKeyEvent(event KeyboardEvent) error {
 		return nil
 	}
 
-	if len(event.Key) == 1 {
+	if len(event.Key) < 3 {
 		return buffer.Append(rune(event.Key[0]))
 	}
 

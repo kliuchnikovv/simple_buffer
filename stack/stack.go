@@ -13,18 +13,21 @@ type ActionStack struct {
 	stack   []Event
 	pointer int
 
-	insert func(selection.Selection, ...rune) error
-	delete func(selection.Selection) error
+	insert       func(selection.Selection, ...rune) error
+	delete       func(selection.Selection) error
+	setSelection func(selection.Selection)
 }
 
 func New(capacity int,
 	insert func(selection.Selection, ...rune) error,
 	delete func(selection.Selection) error,
+	setSelection func(selection.Selection),
 ) *ActionStack {
 	return &ActionStack{
-		stack:  make([]Event, 0, capacity),
-		insert: insert,
-		delete: delete,
+		stack:        make([]Event, 0, capacity),
+		insert:       insert,
+		delete:       delete,
+		setSelection: setSelection,
 	}
 }
 
@@ -100,6 +103,8 @@ func NewDeletion(sel selection.Selection, runes []rune) *Deletion {
 func (d *Deletion) Undo(as *ActionStack) error {
 	var newSelection = d.Selection.Copy()
 	newSelection.Collapse()
+
+	defer as.setSelection(d.Selection)
 
 	return as.insert(newSelection, d.data...)
 }

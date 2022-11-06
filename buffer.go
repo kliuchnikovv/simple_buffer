@@ -3,6 +3,7 @@ package simple_buffer
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/KlyuchnikovV/edicode/core/context"
 	"github.com/KlyuchnikovV/simple_buffer/selection"
@@ -11,8 +12,9 @@ import (
 )
 
 type Buffer struct {
-	name string
-	data []rune
+	name       string
+	data       []rune
+	ModifiedAt int64
 
 	ctx context.Context
 
@@ -30,9 +32,10 @@ func New(ctx context.Context, name string, runes ...rune) *Buffer {
 		data:        runes,
 		KeyEvents:   make(chan KeyboardEvent, 100),
 		MouseEvents: make(chan selection.MouseEvent, 100),
+		ModifiedAt:  time.Now().Unix(),
 	}
 
-	buffer.stack = stack.New(50, buffer.insert, buffer.remove)
+	buffer.stack = stack.New(50, buffer.insert, buffer.remove, buffer.SetSelection)
 
 	buffer.Selection = selection.NewSelection(func(s string, i interface{}) {
 		buffer.ctx.Emit(s, name, i)
@@ -101,7 +104,7 @@ func (buffer *Buffer) Insert(sel selection.Selection, runes ...rune) error {
 
 	defer func(old []rune) {
 		var newSelection = sel.Copy()
-		newSelection.SetSelection(sel.Start(), buffer.Selection.End())
+		newSelection.SetStartAndEnd(sel.Start(), buffer.Selection.End())
 
 		var event stack.Event = stack.NewInsertion(newSelection, runes)
 		if !sel.IsCollapsed() {
@@ -148,7 +151,7 @@ func (buffer *Buffer) insert(sel selection.Selection, runes ...rune) error {
 		offset = len(runes[idx+1:])
 	}
 
-	buffer.Selection.MoveCaret(numberOfLines, offset-buffer.Start().Offset)
+	buffer.Selection.MoveCaret(numberOfLines, offset /*-buffer.Start().Offset*/)
 	buffer.Collapse()
 
 	buffer.ctx.Emit("buffer", "changed", buffer.name)
@@ -190,7 +193,7 @@ func (buffer *Buffer) remove(sel selection.Selection) error {
 
 	buffer.data = data
 	sel.Collapse()
-	buffer.Selection.SetSelection(sel.Start(), sel.End())
+	buffer.Selection.SetStartAndEnd(sel.Start(), sel.End())
 	buffer.ctx.Emit("buffer", "changed", buffer.name)
 
 	return nil
@@ -245,7 +248,7 @@ func (buffer *Buffer) SelectAll() error {
 		return err
 	}
 
-	buffer.SetSelection(selection.Caret{
+	buffer.SetStartAndEnd(selection.Caret{
 		Line: 0, Offset: 0,
 	}, selection.Caret{
 		Line:   numberOfLines,

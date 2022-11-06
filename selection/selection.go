@@ -173,7 +173,11 @@ func (s *Selection) MoveCaret(line, offset int) {
 	}
 }
 
-func (s *Selection) SetSelection(start, end Caret) {
+func (s *Selection) SetSelection(sel Selection) {
+	s.SetStartAndEnd(sel.start, sel.end)
+}
+
+func (s *Selection) SetStartAndEnd(start, end Caret) {
 	s.start.SetAs(start)
 	s.end.SetAs(end)
 
