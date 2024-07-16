@@ -5,9 +5,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/KlyuchnikovV/edicode/core/context"
-	"github.com/KlyuchnikovV/simple_buffer/selection"
-	"github.com/KlyuchnikovV/simple_buffer/stack"
+	"github.com/kliuchnikovv/edicode/core/context"
+	"github.com/kliuchnikovv/simple_buffer/selection"
+	"github.com/kliuchnikovv/simple_buffer/stack"
 	"golang.design/x/clipboard"
 )
 

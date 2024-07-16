@@ -1,7 +1,7 @@
 package stack
 
 import (
-	"github.com/KlyuchnikovV/simple_buffer/selection"
+	"github.com/kliuchnikovv/simple_buffer/selection"
 )
 
 type Event interface {
